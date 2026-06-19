@@ -1,7 +1,6 @@
 import streamlit as st
 import cv2
 import numpy as np
-import math
 
 # ตั้งค่าหน้าเว็บสตรีมลิต
 st.set_page_config(page_title="Pineapple Brix Analyzer", layout="centered")
@@ -11,12 +10,12 @@ st.write("เปลี่ยนระบบจาก Google Colab มาอย�
 st.markdown("---")
 
 # =========================================
-# SELECT MODEL (เปลี่ยนจาก input() มาเป็นตัวเลือกบนเว็บ)
+# SELECT MODEL
 # =========================================
 model = st.selectbox("กรุณาเลือก Model ที่ต้องการใช้งาน:", ["model2", "model3"])
 
 # =========================================
-# UPLOAD IMAGE (เปลี่ยนจาก files.upload() มาเป็นช่องอัปโหลดบนเว็บ)
+# UPLOAD IMAGE
 # =========================================
 uploaded_file = st.file_uploader("อัปโหลดรูปภาพสับปะรดของคุณ (.jpg, .jpeg, .png)", type=["jpg", "jpeg", "png"])
 
@@ -29,7 +28,7 @@ if uploaded_file is not None:
     rgb = cv2.cvtColor(img_input, cv2.COLOR_BGR2RGB)
 
     # =========================
-    # Resize (โค้ดเดิมของน้อง)
+    # Resize 
     # =========================
     h, w = rgb.shape[:2]
     if max(h, w) > 1200:
@@ -41,7 +40,7 @@ if uploaded_file is not None:
     FORCE_LEFT_TO_RIGHT = True
 
     # =========================
-    # PREPROCESS (โค้ดเดิมของน้อง)
+    # PREPROCESS 
     # =========================
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
@@ -70,7 +69,7 @@ if uploaded_file is not None:
     )
 
     # =========================
-    # FIND CONTOURS (โค้ดเดิมของน้อง)
+    # FIND CONTOURS 
     # =========================
     contours, _ = cv2.findContours(
         th,
@@ -100,7 +99,6 @@ if uploaded_file is not None:
     # CHECK & CALCULATE
     # =========================
     if len(centers) < 10:
-        # แทนการ print() ให้แสดงกล่องเตือนสีส้มบนหน้าเว็บแทนเพื่อความสวยงาม
         st.warning("พบตาสับปะรดน้อยเกินไป กรุณาเปลี่ยนรูปภาพถ่ายที่ชัดเจนหรือสว่างกว่านี้ครับ")
     else:
         pts = np.array(
@@ -120,7 +118,7 @@ if uploaded_file is not None:
             pts[:,0] = -pts[:,0]
 
         # =========================
-        # DRAW CONNECTIONS (โค้ดเดิมของน้อง)
+        # DRAW CONNECTIONS 
         # =========================
         for i in range(len(pts)-1):
             p1 = (int(pts[i][0]), int(pts[i][1]))
@@ -128,7 +126,7 @@ if uploaded_file is not None:
             cv2.line(rgb, p1, p2, (255,255,0), 2)
 
         # =========================
-        # FIT MAIN SPIRAL (โค้ดเดิมของน้อง)
+        # FIT MAIN SPIRAL 
         # =========================
         vx, vy, x0, y0 = cv2.fitLine(
             pts,
@@ -138,10 +136,11 @@ if uploaded_file is not None:
             0.01
         )
 
-        vx, vy, x0, y0 = map(
-            float,
-            [vx, vy, x0, y0]
-        )
+        # ✨ [จุดแก้ไขหลัก] ใช้ .item() เพื่อดึงค่าตัวเลขออกมาแปลงเป็นสเกลาร์อย่างปลอดภัย ป้องกัน TypeError บนคลาวด์
+        vx = float(vx.item())
+        vy = float(vy.item())
+        x0 = float(x0.item())
+        y0 = float(y0.item())
 
         angle_main = np.degrees(
             np.arctan2(vy, vx)
@@ -155,7 +154,7 @@ if uploaded_file is not None:
         angle_used = None
 
         # =========================
-        # MODEL2 (โค้ดเดิมของน้อง)
+        # MODEL2 
         # =========================
         if model == "model2":
             cv2.line(
@@ -180,7 +179,7 @@ if uploaded_file is not None:
             cv2.line(
                 rgb,
                 (int(x0-vx_r*L), int(y0-vy_r*L)),
-                (int(x0+vx_r*L), int(y0+vy_r*L)),
+                (int(x0+vx_r*L), int(y0-vy_r*L)),
                 (0,0,255),
                 5
             )
@@ -203,7 +202,7 @@ if uploaded_file is not None:
             )
 
         # =========================
-        # MODEL3 (โค้ดเดิมของน้อง)
+        # MODEL3 
         # =========================
         elif model == "model3":
             cv2.line(
@@ -228,7 +227,7 @@ if uploaded_file is not None:
             cv2.line(
                 rgb,
                 (int(x0-vx_r*L), int(y0-vy_r*L)),
-                (int(x0+vx_r*L), int(y0+vy_r*L)),
+                (int(x0+vx_r*L), int(y0-vy_r*L)),
                 (0,0,255),
                 6
             )
@@ -260,7 +259,7 @@ if uploaded_file is not None:
             )
 
         # =========================
-        # DRAW POINTS (โค้ดเดิมของน้อง)
+        # DRAW POINTS 
         # =========================
         for p in pts:
             cv2.circle(
@@ -295,11 +294,10 @@ if uploaded_file is not None:
             3
         )
 
-        # เปลี่ยนจาก plt.show() มาแสดงภาพบนเว็บ Streamlit โดยตรง 
-        # (ภาพ rgb จะแสดงสีและเส้นตรงกับที่ประมวลผลใน Colab ทุกประการ)
+        # แสดงภาพผลลัพธ์ผ่านหน้าเว็บสตรีมลิต
         st.image(rgb, caption=f"ผลการวิเคราะห์สับปะรดด้วย {model}", use_container_width=True)
 
-        # แสดงค่าตัวเลขรายงานผลสรุปสวยๆ ด้านล่างภาพ
+        # รายงานสรุปข้อมูลตัวเลขโมเดลคณิตศาสตร์
         st.markdown("### 📊 ผลสรุปตัวเลขจากการคำนวณ")
         c1, c2, c3 = st.columns(3)
         with c1:
