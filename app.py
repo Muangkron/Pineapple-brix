@@ -5,137 +5,136 @@ import PIL.Image
 import streamlit as st
 from streamlit_image_coordinates import streamlit_image_coordinates
 
+# -----------------------------------------------------------------------------
+# 1. Config & State
+# -----------------------------------------------------------------------------
 st.set_page_config(page_title="Pineapple Spiral Brix", page_icon="🍍", layout="wide")
-st.title("🍍 ระบบวัดมุมเกลียว & คำนวณ Brix")
+st.title("🍍 ระบบวัดมุมเกลียวสับปะรด & คำนวณ Brix")
 
-if "clicked_pts" not in st.session_state:
-    st.session_state.clicked_pts = []
-if "img_rotation" not in st.session_state:
-    st.session_state.img_rotation = 0.0
-
-def rotate_image(cv_img, angle_deg):
-    if abs(angle_deg) < 0.1:
-        return cv_img
-    h, w = cv_img.shape[:2]
-    center = (w // 2, h // 2)
-    rot_matrix = cv2.getRotationMatrix2D(center, angle_deg, 1.0)
-    return cv2.warpAffine(cv_img, rot_matrix, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_CONSTANT, borderValue=(255, 255, 255))
+if "points" not in st.session_state:
+    st.session_state.points = []
+if "angle_rotation" not in st.session_state:
+    st.session_state.angle_rotation = 0.0
 
 # -----------------------------------------------------------------------------
-# ฟังก์ชันคำนวณมุมป้านจากแกน X ขวาแบบตรงๆ
+# 2. ฟังก์ชันคำนวณมุมป้านจากแกนนอนขวา (เขียนใหม่แบบตรงไปตรงมา)
 # -----------------------------------------------------------------------------
-def calculate_theta_measured(p1, p2):
-    dx = abs(p2["x"] - p1["x"])
-    dy = abs(p2["y"] - p1["y"])
+def calculate_spiral_angle(pt1, pt2):
+    """
+    คำนวณมุมป้านทวนเข็มนาฬิกาจากแกนนอนขวา (0 - 180 องศา)
+    """
+    dx = abs(pt2["x"] - pt1["x"])
+    dy = abs(pt2["y"] - pt1["y"])
 
     if dx == 0:
         return 90.0
 
-    # 1. หามุมแหลมดิบของเส้นตรง (0 - 90 องศา)
-    phi_deg = math.degrees(math.atan(dy / dx))
+    # 1. หามุมแหลมระหว่างเส้นตรงกับแกนนอน (0 - 90 องศา)
+    phi = math.degrees(math.atan(dy / dx))
 
-    # 2. แปลงเป็นมุมป้านทวนเข็มนาฬิกาจากแกน X ด้านขวา
-    # ถ้าเดิมวัดได้ 125° -> มุมแหลมคือ (180 - 125 = 55°)
-    # พอนำหลักทางคณิตศาสตร์สลับทิศจะเทียบเท่ากับ 180 - phi หรือ 270 - phi ตามที่คุณต้องการ
-    theta = 180.0 - phi_deg
-
+    # 2. แปลงเป็นมุมป้านฝั่งแกน X ขวาชี้ขึ้นไปหาเส้นเกลียว (180 - phi)
+    theta = 180.0 - phi
     return theta
 
-def draw_measurement_hud(cv_img, points):
-    img_out = cv_img.copy()
+def rotate_img(cv_img, angle):
+    if abs(angle) < 0.1:
+        return cv_img
+    h, w = cv_img.shape[:2]
+    M = cv2.getRotationMatrix2D((w // 2, h // 2), angle, 1.0)
+    return cv2.warpAffine(cv_img, M, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_CONSTANT, borderValue=(255, 255, 255))
+
+def draw_hud(cv_img, pts):
+    img = cv_img.copy()
     
-    for i, p in enumerate(points):
-        pt = (int(p["x"]), int(p["y"]))
-        cv2.circle(img_out, pt, 7, (0, 255, 255), -1, cv2.LINE_AA)
-        cv2.circle(img_out, pt, 9, (0, 0, 255), 2, cv2.LINE_AA)
-        cv2.putText(img_out, f"P{i+1}", (pt[0] + 10, pt[1] - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2, cv2.LINE_AA)
+    # วาดจุดเล็ง
+    for i, p in enumerate(pts):
+        pos = (int(p["x"]), int(p["y"]))
+        cv2.circle(img, pos, 6, (0, 255, 255), -1, cv2.LINE_AA)
+        cv2.circle(img, pos, 8, (0, 0, 255), 2, cv2.LINE_AA)
+        cv2.putText(img, f"P{i+1}", (pos[0] + 10, pos[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
 
-    if len(points) == 2:
-        pt1 = (int(points[0]["x"]), int(points[0]["y"]))
-        pt2 = (int(points[1]["x"]), int(points[1]["y"]))
+    if len(pts) == 2:
+        p1, p2 = (int(pts[0]["x"]), int(pts[0]["y"])), (int(pts[1]["x"]), int(pts[1]["y"]))
+        
+        # คำนวณมุม
+        theta = calculate_spiral_angle(pts[0], pts[1])
+        
+        # วาดเส้นเกลียวสีแดง
+        cv2.line(img, p1, p2, (0, 0, 255), 3, cv2.LINE_AA)
 
-        theta = calculate_theta_measured(points[0], points[1])
+        # วาดเส้นแกนนอนสีแดงตัดผ่านจุดกึ่งกลาง (แบบในรูปของคุณ)
+        mid_x, mid_y = int((p1[0] + p2[0]) / 2), int((p1[1] + p2[1]) / 2)
+        cv2.line(img, (mid_x - 150, mid_y), (mid_x + 150, mid_y), (0, 0, 255), 2, cv2.LINE_AA)
 
-        # จุดศูนย์กลางสำหรับวาดแกน
-        mid_x = int((pt1[0] + pt2[0]) / 2)
-        mid_y = int((pt1[1] + pt2[1]) / 2)
+        # ข้อความแสดงมุมองศา
+        cv2.putText(img, f"Theta: {theta:.1f} deg", (mid_x + 20, mid_y - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
 
-        # วาดเส้นแกนนอนสีแดงผ่ากลางเหมือนในรูปถ่ายของคุณ
-        axis_len = 150
-        cv2.line(img_out, (mid_x - axis_len, mid_y), (mid_x + axis_len, mid_y), (0, 0, 255), 2, cv2.LINE_AA)
+    return PIL.Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
 
-        # วาดเส้นเกลียวสับปะรดสีแดง
-        cv2.line(img_out, pt1, pt2, (0, 0, 255), 3, cv2.LINE_AA)
-
-        # แสดงค่ามุมที่คำนวณได้
-        cv2.putText(img_out, f"Theta: {theta:.1f} deg", (mid_x + 30, mid_y - 15),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2, cv2.LINE_AA)
-
-    return PIL.Image.fromarray(cv2.cvtColor(img_out, cv2.COLOR_BGR2RGB))
-
-def calc_brix(theta, model_name):
-    if "Model 5-8-13" in model_name:
-        ideal_deg = 155.0
-        x = abs(theta - ideal_deg)
-        brix = (-0.0196 * (x**2)) + (0.0045 * x) + 16.757
+def calc_brix_val(theta, model_type):
+    if "Model 5-8-13" in model_type:
+        ideal = 155.0
+        diff = abs(theta - ideal)
+        brix = (-0.0196 * (diff**2)) + (0.0045 * diff) + 16.757
     else:
-        ideal_deg = 136.0
-        x = abs(theta - ideal_deg)
-        brix = (0.0082 * (x**2)) - (0.6667 * x) + 16.362
+        ideal = 136.0
+        diff = abs(theta - ideal)
+        brix = (0.0082 * (diff**2)) - (0.6667 * diff) + 16.362
     return brix
 
 # -----------------------------------------------------------------------------
-# UI Section
+# 3. Sidebar Controls
 # -----------------------------------------------------------------------------
 with st.sidebar:
-    st.header("⚙️ เลือกโมเดลสับปะรด")
+    st.header("⚙️ ตัวเลือกโมเดล")
     model_choice = st.radio(
-        "ระบุประเภทโมเดล:",
+        "เลือกรุ่นโมเดลสับปะรด:",
         options=["Model 5-8-13 (มุมอุดมคติ 155°)", "Model 8-13-21 (มุมอุดมคติ 136°)"]
     )
 
+# -----------------------------------------------------------------------------
+# 4. Main UI
+# -----------------------------------------------------------------------------
 uploaded_file = st.file_uploader("อัปโหลดรูปภาพสับปะรด", type=["jpg", "jpeg", "png"])
 
-if uploaded_file is not None:
-    col1, col2 = st.columns([1.3, 1])
+if uploaded_file:
+    col_left, col_right = st.columns([1.3, 1])
 
-    raw_pil_image = PIL.Image.open(uploaded_file).convert("RGB")
-    cv_img_orig = cv2.cvtColor(np.array(raw_pil_image), cv2.COLOR_RGB2BGR)
+    raw_pil = PIL.Image.open(uploaded_file).convert("RGB")
+    cv_img_raw = cv2.cvtColor(np.array(raw_pil), cv2.COLOR_RGB2BGR)
 
-    with col2:
-        st.subheader("🖼️ 1. หมุนรูปภาพ (ถ้าจำเป็น)")
-        img_angle = st.slider("หมุนปรับระดับภาพ (องศา):", -180.0, 180.0, float(st.session_state.img_rotation), 0.5)
-        st.session_state.img_rotation = img_angle
-        rotated_cv_img = rotate_image(cv_img_orig, st.session_state.img_rotation)
+    with col_right:
+        st.subheader("🖼️ 1. ปรับหมุนภาพ")
+        rot_val = st.slider("องศาหมุนภาพ:", -180.0, 180.0, float(st.session_state.angle_rotation), 0.5)
+        st.session_state.angle_rotation = rot_val
+        cv_img_rotated = rotate_img(cv_img_raw, st.session_state.angle_rotation)
 
         st.markdown("---")
-        st.subheader("📍 2. จัดการจุดเล็งเกลียว (2 จุด)")
-        if st.button("🗑️ ล้างจุดทั้งหมด"):
-            st.session_state.clicked_pts = []
+        st.subheader("📍 2. ควบคุมการเล็งจุด")
+        if st.button("🗑️ ล้างจุดทั้งหมด (Clear)"):
+            st.session_state.points = []
             st.rerun()
 
-        pts_count = len(st.session_state.clicked_pts)
-        st.write(f"เลือกแล้ว: `{pts_count} / 2` จุด")
+        st.write(f"สถานะ: เลือกแล้ว `{len(st.session_state.points)} / 2` จุด")
 
-        if pts_count == 2:
-            calculated_theta = calculate_theta_measured(st.session_state.clicked_pts[0], st.session_state.clicked_pts[1])
-            brix_val = calc_brix(calculated_theta, model_choice)
+        if len(st.session_state.points) == 2:
+            calc_theta = calculate_spiral_angle(st.session_state.points[0], st.session_state.points[1])
+            brix_res = calc_brix_val(calc_theta, model_choice)
 
             st.markdown("---")
-            st.subheader("📊 ผลการคำนวณ")
-            st.metric("มุมเกลียวที่วัดได้ (θ)", f"{calculated_theta:.1f}°")
-            st.metric("🍬 ค่า Brix คำนวณได้", f"{brix_val:.2f}")
+            st.subheader("📊 ผลลัพธ์")
+            st.metric("มุมเกลียวที่วัดได้ (θ)", f"{calc_theta:.1f}°")
+            st.metric("ค่าความหวานประเมิน (Brix)", f"{brix_res:.2f} °Brix")
 
-    with col1:
-        st.subheader("🎯 คลิกเล็งจุดบนรูปภาพ")
-        drawn_pil_img = draw_measurement_hud(rotated_cv_img, st.session_state.clicked_pts)
+    with col_left:
+        st.subheader("🎯 คลิกเลือกจุด 2 จุดบนเกลียวสับปะรด")
+        drawn_image = draw_hud(cv_img_rotated, st.session_state.points)
         
-        value = streamlit_image_coordinates(drawn_pil_img, key="pil_image")
+        clicked_val = streamlit_image_coordinates(drawn_image, key="img_coords")
 
-        if value is not None:
-            new_pt = {"x": value["x"], "y": value["y"]}
-            if len(st.session_state.clicked_pts) == 0 or (st.session_state.clicked_pts[-1] != new_pt):
-                if len(st.session_state.clicked_pts) < 2:
-                    st.session_state.clicked_pts.append(new_pt)
+        if clicked_val:
+            pt_new = {"x": clicked_val["x"], "y": clicked_val["y"]}
+            if len(st.session_state.points) == 0 or (st.session_state.points[-1] != pt_new):
+                if len(st.session_state.points) < 2:
+                    st.session_state.points.append(pt_new)
                     st.rerun()
