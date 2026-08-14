@@ -22,30 +22,24 @@ def rotate_image(cv_img, angle_deg):
     return cv2.warpAffine(cv_img, rot_matrix, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_CONSTANT, borderValue=(255, 255, 255))
 
 # -----------------------------------------------------------------------------
-# ฟังก์ชันคำนวณมุมโดยใช้หลักคณิตศาสตร์ที่คุณกำหนด (270 - raw_angle)
+# ฟังก์ชันคำนวณมุมป้านจากแกน X ขวาแบบตรงๆ
 # -----------------------------------------------------------------------------
 def calculate_theta_measured(p1, p2):
-    # คำนวณหาความแตกต่างของพิกัดภาพปกติ
-    dx = p2["x"] - p1["x"]
-    dy = p2["y"] - p1["y"]
+    dx = abs(p2["x"] - p1["x"])
+    dy = abs(p2["y"] - p1["y"])
 
     if dx == 0:
         return 90.0
 
-    # 1. หามุมดิบจากระบบพิกัดหน้าจอ (หน่วยองศา)
-    raw_angle = math.degrees(math.atan2(abs(dy), abs(dx)))
+    # 1. หามุมแหลมดิบของเส้นตรง (0 - 90 องศา)
+    phi_deg = math.degrees(math.atan(dy / dx))
 
-    # 2. ใช้หลักคณิตศาสตร์แปลงมุมกลับมาเป็นมุมป้านที่เราต้องการวัดจากแกนนอนขวา
-    # ปรับจูนตามทิศทางที่คุณต้องการ
-    final_theta = 270.0 - raw_angle
-    
-    # กรณีมุมเกิน 180 ให้ปรับกลับมาอยู่ในช่วงมุมเกลียว (90 - 180 องศา)
-    while final_theta > 180.0:
-        final_theta -= 90.0
-    while final_theta < 0.0:
-        final_theta += 180.0
+    # 2. แปลงเป็นมุมป้านทวนเข็มนาฬิกาจากแกน X ด้านขวา
+    # ถ้าเดิมวัดได้ 125° -> มุมแหลมคือ (180 - 125 = 55°)
+    # พอนำหลักทางคณิตศาสตร์สลับทิศจะเทียบเท่ากับ 180 - phi หรือ 270 - phi ตามที่คุณต้องการ
+    theta = 180.0 - phi_deg
 
-    return final_theta
+    return theta
 
 def draw_measurement_hud(cv_img, points):
     img_out = cv_img.copy()
@@ -67,7 +61,7 @@ def draw_measurement_hud(cv_img, points):
         mid_x = int((pt1[0] + pt2[0]) / 2)
         mid_y = int((pt1[1] + pt2[1]) / 2)
 
-        # วาดเส้นแกนนอนสีแดงผ่ากลาง
+        # วาดเส้นแกนนอนสีแดงผ่ากลางเหมือนในรูปถ่ายของคุณ
         axis_len = 150
         cv2.line(img_out, (mid_x - axis_len, mid_y), (mid_x + axis_len, mid_y), (0, 0, 255), 2, cv2.LINE_AA)
 
