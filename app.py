@@ -1,14 +1,10 @@
 import math
-import os
 import cv2
 import numpy as np
 import PIL.Image
 import streamlit as st
 from streamlit_image_coordinates import streamlit_image_coordinates
 
-# -----------------------------------------------------------------------------
-# 1. Page Config & Session State
-# -----------------------------------------------------------------------------
 st.set_page_config(page_title="Pineapple Brix Calculator", page_icon="🍍", layout="wide")
 st.title("🍍 ระบบวัดมุมเกลียวสับปะรด (Manual 2-Point Click)")
 
@@ -18,8 +14,25 @@ if "img_rotation" not in st.session_state:
     st.session_state.img_rotation = 0.0
 
 # -----------------------------------------------------------------------------
-# 2. Helper Functions
+# ฟังก์ชันคำนวณมุมใหม่ (วัดจากแกน X ด้านขวา ทวนเข็มนาฬิกาขึ้นไป)
 # -----------------------------------------------------------------------------
+def calculate_theta_from_2points(pt1, pt2):
+    # เรียงจุดให้ p1 อยู่ด้านล่างเสมอ (y มากกว่า) เพื่อให้ทิศทางลากขึ้นข้างบน
+    if pt1["y"] < pt2["y"]:
+        pt1, pt2 = pt2, pt1
+
+    dx = pt2["x"] - pt1["x"]
+    dy = -(pt2["y"] - pt1["y"])  # กลับทิศ Y เพราะพิกัดจอภาพ Y ชี้ลงล่าง
+
+    # คำนวณมุมจากแกน X ทางขวา ทวนเข็มนาฬิกา (0 - 360 องศา)
+    angle_rad = math.atan2(dy, dx)
+    angle_deg = math.degrees(angle_rad)
+
+    if angle_deg < 0:
+        angle_deg += 360.0
+
+    return angle_deg
+
 def rotate_image(cv_img, angle_deg):
     if abs(angle_deg) < 0.1:
         return cv_img
@@ -27,16 +40,6 @@ def rotate_image(cv_img, angle_deg):
     center = (w // 2, h // 2)
     rot_matrix = cv2.getRotationMatrix2D(center, angle_deg, 1.0)
     return cv2.warpAffine(cv_img, rot_matrix, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_CONSTANT, borderValue=(255, 255, 255))
-
-def calculate_theta_from_2points(pt1, pt2):
-    dx = pt2["x"] - pt1["x"]
-    dy = pt2["y"] - pt1["y"]
-    if dx == 0:
-        return 90.0
-    m = -dy / dx
-    phi_deg = math.degrees(math.atan(abs(m)))
-    theta = (180.0 - phi_deg) if m >= 0 else (90.0 + phi_deg)
-    return max(90.0, min(180.0, theta))
 
 def draw_hud(cv_img, points):
     img_out = cv_img.copy()
@@ -48,12 +51,21 @@ def draw_hud(cv_img, points):
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2, cv2.LINE_AA)
 
     if len(points) == 2:
-        pt1 = (int(points[0]["x"]), int(points[0]["y"]))
-        pt2 = (int(points[1]["x"]), int(points[1]["y"]))
+        # เรียงจุดให้อยู่ในทิศทางเดียวกันสำหรับวาดเส้นแกน X อ้างอิง
+        p1_idx = 0 if points[0]["y"] >= points[1]["y"] else 1
+        p2_idx = 1 - p1_idx
+        
+        pt1 = (int(points[p1_idx]["x"]), int(points[p1_idx]["y"]))
+        pt2 = (int(points[p2_idx]["x"]), int(points[p2_idx]["y"]))
+
+        # วาดเส้นเชื่อมจุดเกลียว (สีแดง)
         cv2.line(img_out, pt1, pt2, (0, 0, 255), 3, cv2.LINE_AA)
-        min_x, max_x = min(pt1[0], pt2[0]) - 50, max(pt1[0], pt2[0]) + 50
-        base_y = max(pt1[1], pt2[1])
-        cv2.line(img_out, (min_x, base_y), (max_x, base_y), (255, 200, 0), 2, cv2.LINE_AA)
+
+        # วาดเส้นแกน X อ้างอิงไปทางขวา (สีเหลือง) จากจุดเริ่มต้น
+        axis_end_x = pt1[0] + 100
+        cv2.line(img_out, pt1, (axis_end_x, pt1[1]), (0, 255, 255), 2, cv2.LINE_AA)
+        cv2.putText(img_out, "X-axis (0 deg)", (axis_end_x + 5, pt1[1] + 5),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1, cv2.LINE_AA)
 
     return PIL.Image.fromarray(cv2.cvtColor(img_out, cv2.COLOR_BGR2RGB))
 
@@ -69,7 +81,7 @@ def calc_brix(theta, model_name):
     return brix, x, ideal_deg
 
 # -----------------------------------------------------------------------------
-# 3. Sidebar Controls
+# Sidebar Controls
 # -----------------------------------------------------------------------------
 with st.sidebar:
     st.header("⚙️ เลือกโมเดลสับปะรด")
@@ -79,7 +91,7 @@ with st.sidebar:
     )
 
 # -----------------------------------------------------------------------------
-# 4. Main App
+# Main App
 # -----------------------------------------------------------------------------
 uploaded_file = st.file_uploader("อัปโหลดรูปภาพสับปะรด", type=["jpg", "jpeg", "png"])
 
