@@ -13,9 +13,6 @@ if "clicked_pts" not in st.session_state:
 if "img_rotation" not in st.session_state:
     st.session_state.img_rotation = 0.0
 
-# -----------------------------------------------------------------------------
-# Helper Functions
-# -----------------------------------------------------------------------------
 def rotate_image(cv_img, angle_deg):
     if abs(angle_deg) < 0.1:
         return cv_img
@@ -25,33 +22,34 @@ def rotate_image(cv_img, angle_deg):
     return cv2.warpAffine(cv_img, rot_matrix, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_CONSTANT, borderValue=(255, 255, 255))
 
 # -----------------------------------------------------------------------------
-# ฟังก์ชันคำนวณมุมใหม่ (แก้ไขปัญหาการวัดสลับด้าน)
+# ฟังก์ชันคำนวณมุมโดยใช้หลักคณิตศาสตร์ที่คุณกำหนด (270 - raw_angle)
 # -----------------------------------------------------------------------------
 def calculate_theta_measured(p1, p2):
-    """
-    คำนวณมุมเกลียวสับปะรดเทียบกับแกน X ทางขวา
-    p1, p2: จุด 2 จุดที่คลิกเลือกบนเส้นเกลียว
-    """
+    # คำนวณหาความแตกต่างของพิกัดภาพปกติ
     dx = p2["x"] - p1["x"]
-    dy = -(p2["y"] - p1["y"])  # กลับทิศ Y เพราะพิกัดจอภาพ Y ชี้ลงล่าง
+    dy = p2["y"] - p1["y"]
 
     if dx == 0:
         return 90.0
 
-    # คำนวณมุมองศาของเส้นตรงเทียบกับแกน X ขวา
-    angle_rad = math.atan2(dy, dx)
-    angle_deg = math.degrees(angle_rad)
+    # 1. หามุมดิบจากระบบพิกัดหน้าจอ (หน่วยองศา)
+    raw_angle = math.degrees(math.atan2(abs(dy), abs(dx)))
 
-    # ปรับให้อยู่ในมุมป้าน/แหลม เทียบกับแกนนอนขวา (0 - 180 องศา)
-    if angle_deg < 0:
-        angle_deg += 180.0
+    # 2. ใช้หลักคณิตศาสตร์แปลงมุมกลับมาเป็นมุมป้านที่เราต้องการวัดจากแกนนอนขวา
+    # ปรับจูนตามทิศทางที่คุณต้องการ
+    final_theta = 270.0 - raw_angle
+    
+    # กรณีมุมเกิน 180 ให้ปรับกลับมาอยู่ในช่วงมุมเกลียว (90 - 180 องศา)
+    while final_theta > 180.0:
+        final_theta -= 90.0
+    while final_theta < 0.0:
+        final_theta += 180.0
 
-    return angle_deg
+    return final_theta
 
 def draw_measurement_hud(cv_img, points):
     img_out = cv_img.copy()
     
-    # วาดจุดที่คลิก
     for i, p in enumerate(points):
         pt = (int(p["x"]), int(p["y"]))
         cv2.circle(img_out, pt, 7, (0, 255, 255), -1, cv2.LINE_AA)
@@ -63,33 +61,26 @@ def draw_measurement_hud(cv_img, points):
         pt1 = (int(points[0]["x"]), int(points[0]["y"]))
         pt2 = (int(points[1]["x"]), int(points[1]["y"]))
 
-        # คำนวณมุม
         theta = calculate_theta_measured(points[0], points[1])
 
-        # หาจุดศูนย์กลางระหว่าง 2 จุดเพื่อเป็นจุดตัดแกนนอน
+        # จุดศูนย์กลางสำหรับวาดแกน
         mid_x = int((pt1[0] + pt2[0]) / 2)
         mid_y = int((pt1[1] + pt2[1]) / 2)
-        center_pt = (mid_x, mid_y)
 
-        # วาดเส้นแกน X อ้างอิงผ่านจุดกลาง (เส้นสีแดงแนวนอนแบบในรูปของคุณ)
+        # วาดเส้นแกนนอนสีแดงผ่ากลาง
         axis_len = 150
         cv2.line(img_out, (mid_x - axis_len, mid_y), (mid_x + axis_len, mid_y), (0, 0, 255), 2, cv2.LINE_AA)
 
-        # วาดเส้นเกลียวสับปะรดเฉียง (เส้นสีแดง)
+        # วาดเส้นเกลียวสับปะรดสีแดง
         cv2.line(img_out, pt1, pt2, (0, 0, 255), 3, cv2.LINE_AA)
 
-        # วาดส่วนโค้งบอกมุม (สีเขียว) วัดจากแกน X ขวาไปหาเส้นเกลียว
-        arc_radius = 40
-        cv2.ellipse(img_out, center_pt, (arc_radius, arc_radius), 0, 0, -int(theta), (0, 255, 0), 2, cv2.LINE_AA)
-
-        # แสดงข้อความค่ามุมบนรูป
-        cv2.putText(img_out, f"{theta:.1f} deg", (mid_x + 50, mid_y - 20),
+        # แสดงค่ามุมที่คำนวณได้
+        cv2.putText(img_out, f"Theta: {theta:.1f} deg", (mid_x + 30, mid_y - 15),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2, cv2.LINE_AA)
 
     return PIL.Image.fromarray(cv2.cvtColor(img_out, cv2.COLOR_BGR2RGB))
 
 def calc_brix(theta, model_name):
-    # สมการคำนวณ Brix
     if "Model 5-8-13" in model_name:
         ideal_deg = 155.0
         x = abs(theta - ideal_deg)
@@ -101,7 +92,7 @@ def calc_brix(theta, model_name):
     return brix
 
 # -----------------------------------------------------------------------------
-# Sidebar & Main UI
+# UI Section
 # -----------------------------------------------------------------------------
 with st.sidebar:
     st.header("⚙️ เลือกโมเดลสับปะรด")
