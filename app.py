@@ -1,336 +1,212 @@
-import streamlit as st
+import math
+import os
 import cv2
 import numpy as np
+import PIL.Image
+import streamlit as st
+from streamlit_image_coordinates import streamlit_image_coordinates
 
-# ตั้งค่าหน้าเว็บสตรีมลิต
-st.set_page_config(page_title="Pineapple Brix Analyzer", layout="centered")
+# -----------------------------------------------------------------------------
+# 1. Config & Page Setup
+# -----------------------------------------------------------------------------
+st.set_page_config(page_title="Pineapple Manual Measurement & Brix Analyzer", page_icon="🍍", layout="wide")
+st.title("🍍 ระบบวัดมุมเกลียวสับปะรดแบบกำหนด 2 จุดด้วยตนเอง (Manual 2-Point)")
 
-st.title("ระบบวิเคราะห์ความหวานจากตาสับปะรด 🍍")
-st.write("เวอร์ชันอัปเกรด: เพิ่มระบบกรองพื้นหลังและจุดรบกวน (Noise/Background Isolation)")
-st.markdown("---")
+# -----------------------------------------------------------------------------
+# 2. Session State Management
+# -----------------------------------------------------------------------------
+if "clicked_pts" not in st.session_state:
+    st.session_state.clicked_pts = []
+if "img_rotation" not in st.session_state:
+    st.session_state.img_rotation = 0.0
 
-# =========================================
-# SELECT MODEL
-# =========================================
-model = st.selectbox("กรุณาเลือก Model ที่ต้องการใช้งาน:", ["model2", "model3"])
+# -----------------------------------------------------------------------------
+# 3. Helper Functions
+# -----------------------------------------------------------------------------
+def rotate_image(cv_img, angle_deg):
+    """หมุนรูปภาพตามองศาที่กำหนดรอบจุดศูนย์กลางภาพ"""
+    if abs(angle_deg) < 0.1:
+        return cv_img
 
-# =========================================
-# UPLOAD IMAGE
-# =========================================
-uploaded_file = st.file_uploader("อัปโหลดรูปภาพสับปะรดของคุณ (.jpg, .jpeg, .png)", type=["jpg", "jpeg", "png"])
+    h, w = cv_img.shape[:2]
+    center = (w // 2, h // 2)
+
+    rot_matrix = cv2.getRotationMatrix2D(center, angle_deg, 1.0)
+    rotated_img = cv2.warpAffine(
+        cv_img, rot_matrix, (w, h),
+        flags=cv2.INTER_CUBIC,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=(255, 255, 255)
+    )
+    return rotated_img
+
+def calculate_theta_from_2points(pt1, pt2):
+    """
+    คำนวณมุม Theta (θ) จากจุด 2 จุดที่ผู้ใช้คลิก
+    - pt1, pt2: (x, y)
+    - มุมวัดจากแกน X ฝั่งขวา ทวนเข็มนาฬิกา (หน่วยองศา: 90° - 180°)
+    """
+    dx = pt2["x"] - pt1["x"]
+    dy = pt2["y"] - pt1["y"]
+
+    if dx == 0:
+        return 90.0
+
+    # สลับแกน Y เนื่องจากพิกัดรูปภาพ Y ชี้ลง
+    # ความชัน m = dy / dx ในระบบพิกัดคาร์ทีเซียน
+    m = -dy / dx
+
+    phi_rad = math.atan(abs(m))
+    phi_deg = math.degrees(phi_rad)
+
+    # ปรับให้อยู่ในย่าน 90° - 180°
+    if m >= 0:
+        theta = 180.0 - phi_deg
+    else:
+        theta = 90.0 + phi_deg
+
+    return max(90.0, min(180.0, theta))
+
+def draw_hud(cv_img, points):
+    """วาดจุดและเส้นเชื่อม 2 จุดบนภาพ"""
+    img_out = cv_img.copy()
+
+    # วาดจุดที่คลิก
+    for i, p in enumerate(points):
+        pt = (int(p["x"]), int(p["y"]))
+        # จุดวงกลมแดงขอบเหลือง
+        cv2.circle(img_out, pt, 7, (0, 255, 255), -1, cv2.LINE_AA)
+        cv2.circle(img_out, pt, 9, (0, 0, 255), 2, cv2.LINE_AA)
+        cv2.putText(img_out, f"P{i+1}", (pt[0] + 10, pt[1] - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2, cv2.LINE_AA)
+
+    # ถ้าครบ 2 จุด ให้วาดเส้นลากเชื่อมต่อ และเส้น Baseline
+    if len(points) == 2:
+        p1, p2 = points[0], points[1]
+        pt1 = (int(p1["x"]), int(p1["y"]))
+        pt2 = (int(p2["x"]), int(p2["y"]))
+
+        # 1. เส้นลากทับแนวเกลียว (สีแดง)
+        cv2.line(img_out, pt1, pt2, (0, 0, 255), 3, cv2.LINE_AA)
+
+        # 2. เส้นขนานพื้น Baseline (สีฟ้า)
+        min_x = min(pt1[0], pt2[0]) - 50
+        max_x = max(pt1[0], pt2[0]) + 50
+        base_y = max(pt1[1], pt2[1])
+        cv2.line(img_out, (min_x, base_y), (max_x, base_y), (255, 200, 0), 2, cv2.LINE_AA)
+
+    return PIL.Image.fromarray(cv2.cvtColor(img_out, cv2.COLOR_BGR2RGB))
+
+def calc_brix(theta, model_name):
+    """คำนวณ Brix ตามโมเดลที่เลือก"""
+    if "Model 5-8-13" in model_name:
+        ideal_deg = 155.0
+        x = abs(theta - ideal_deg)
+        brix = (-0.0196 * (x**2)) + (0.0045 * x) + 16.757
+    else:
+        ideal_deg = 136.0
+        x = abs(theta - ideal_deg)
+        brix = (0.0082 * (x**2)) - (0.6667 * x) + 16.362
+    return brix, x, ideal_deg
+
+# -----------------------------------------------------------------------------
+# 4. Sidebar Controls
+# -----------------------------------------------------------------------------
+with st.sidebar:
+    st.header("⚙️ 1. เลือกโมเดลสับปะรด")
+    model_choice = st.radio(
+        "ระบุประเภทโมเดล:",
+        options=[
+            "Model 5-8-13 (มุมอุดมคติ 155°)",
+            "Model 8-13-21 (มุมอุดมคติ 136°)"
+        ]
+    )
+
+    st.markdown("---")
+    st.header("💡 วิธีการใช้งาน")
+    st.markdown("""
+    1. **อัปโหลดภาพสับปะรด**
+    2. ใช้ **Slider หมุนภาพ** เพื่อตั้งภาพให้ตรง
+    3. **คลิกเลือกจุด 2 จุด** บนรูปภาพตามแนวเส้นเกลียว
+    4. ระบบจะคำนวณมุมองศา ($\Theta$) และค่า Brix ให้ทันที
+    """)
+
+# -----------------------------------------------------------------------------
+# 5. Main UI & App Logic
+# -----------------------------------------------------------------------------
+uploaded_file = st.file_uploader("อัปโหลดรูปภาพสับปะรด", type=["jpg", "jpeg", "png"])
 
 if uploaded_file is not None:
-    # อ่านไฟล์รูปภาพจากหน้าเว็บเข้าสู่ระบบ OpenCV BGR
-    file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
-    img_input = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-    
-    # แปลงเป็น RGB ตามขั้นตอนแรกในโค้ดเดิมของน้อง
-    rgb = cv2.cvtColor(img_input, cv2.COLOR_BGR2RGB)
+    col1, col2 = st.columns([1.3, 1])
 
-    # =========================
-    # Resize 
-    # =========================
-    h, w = rgb.shape[:2]
-    if max(h, w) > 1200:
-        scale = 1200 / max(h, w)
-        rgb = cv2.resize(rgb, None, fx=scale, fy=scale)
-        h, w = rgb.shape[:2]  # อัปเดตขนาดพิกัดหลังย่อรูปเพื่อใช้คำนวณขอบเขตสับปะรด
+    # โหลดรูปภาพ
+    raw_pil_image = PIL.Image.open(uploaded_file).convert("RGB")
+    cv_img_orig = cv2.cvtColor(np.array(raw_pil_image), cv2.COLOR_RGB2BGR)
 
-    img = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
-
-    FORCE_LEFT_TO_RIGHT = True
-
-    # =========================
-    # PREPROCESS 
-    # =========================
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-    clahe = cv2.createCLAHE(
-        clipLimit=3,
-        tileGridSize=(8,8)
-    )
-    gray = clahe.apply(gray)
-
-    gray = cv2.GaussianBlur(gray, (5,5), 0)
-
-    th = cv2.adaptiveThreshold(
-        gray,
-        255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY_INV,
-        31,
-        5
-    )
-
-    kernel = np.ones((3,3), np.uint8)
-    th = cv2.morphologyEx(
-        th,
-        cv2.MORPH_OPEN,
-        kernel
-    )
-
-    # =========================
-    # FIND CONTOURS 
-    # =========================
-    contours, _ = cv2.findContours(
-        th,
-        cv2.RETR_EXTERNAL,
-        cv2.CHAIN_APPROX_SIMPLE
-    )
-
-    centers = []
-
-    # 🛡️ เกราะชั้นที่ 1: กำหนดระยะขอบปลอดภัย (Margin 3%) เพื่อตัดจุดรบกวนที่ติดขอบรูปภาพทิ้งไปทันที
-    margin_w = w * 0.03
-    margin_h = h * 0.03
-
-    for cnt in contours:
-        area = cv2.contourArea(cnt)
-        if area < 80:
-            continue
-
-        x, y, cw, ch = cv2.boundingRect(cnt)
+    with col2:
+        st.subheader("🖼️ 1. หมุนรูปภาพให้ตั้งตรง")
         
-        # คัดกรอง: หากพิกัดอยู่ในขอบเขตพื้นหลังรอบนอก ให้ข้ามไป ไม่นับเป็นตาสับปะรด
-        if x < margin_w or y < margin_h or (x + cw) > (w - margin_w) or (y + ch) > (h - margin_h):
-            continue
+        # สไลเดอร์หมุนภาพ
+        img_angle = st.slider(
+            "หมุนปรับระดับภาพ (องศา):",
+            min_value=-180.0,
+            max_value=180.0,
+            value=float(st.session_state.img_rotation),
+            step=0.5,
+            format="%.1f°"
+        )
+        st.session_state.img_rotation = img_angle
 
-        ratio = cw / (ch + 1e-6)
-        if ratio < 0.4 or ratio > 2.5:
-            continue
+        # หมุนภาพตามองศา slider
+        rotated_cv_img = rotate_image(cv_img_orig, st.session_state.img_rotation)
 
-        centers.append([
-            x + cw/2,
-            y + ch/2
-        ])
+        st.markdown("---")
+        st.subheader("📍 2. จัดการจุดเล็งเกลียว (2 จุด)")
 
-    # ==================================================
-    # CHECK & FILTER OUTLIERS (🛡️ เกราะชั้นที่ 2: ระบบคัดแยกพื้นหลังสถิติขั้นสูง)
-    # ==================================================
-    if len(centers) < 10:
-        st.warning("พบตาสับปะรดน้อยเกินไป กรุณาเปลี่ยนรูปภาพถ่ายที่ชัดเจน หรือขยับให้ผลสับปะรดอยู่ตรงกลางรูปครับ")
-    else:
-        pts_all = np.array(centers, dtype=np.float32)
-        
-        # หาค่ามัธยฐาน (Median) เพื่อล็อกพิกัดจุดใจกลางของกลุ่มตาสับปะรดหลัก (ช่วยให้ไม่โดนพื้นหลังดึงตำแหน่งดิ่งพัง)
-        med_x = np.median(pts_all[:, 0])
-        med_y = np.median(pts_all[:, 1])
-        
-        # คำนวณระยะห่าง (Euclidean Distance) ของทุกจุดเทียบกับจุดใจกลางสับปะรด
-        dists = np.sqrt((pts_all[:, 0] - med_x)**2 + (pts_all[:, 1] - med_y)**2)
-        
-        # กำหนดเกณฑ์คัดทิ้งโดยอิงหลักสถิติรังวัดกลุ่มข้อมูล (Mean + 1.5 * Standard Deviation)
-        # จุดไหนที่ลอยอยู่เดี่ยวๆ โดดเดี่ยวบนพื้นหลัง จะมีระยะทางเกินเกณฑ์นี้และถูกโยนทิ้งไป
-        threshold_dist = np.mean(dists) + 1.5 * np.std(dists)
-        
-        filtered_centers = []
-        for i, c in enumerate(centers):
-            if dists[i] <= threshold_dist:
-                filtered_centers.append(c)
+        # ปุ่มล้างจุด
+        if st.button("🗑️ ล้างจุดที่เลือกทั้งหมด (Clear Points)"):
+            st.session_state.clicked_pts = []
+            st.rerun()
 
-        # ตรวจสอบซ้ำอีกครั้งหลังจากคัดแยก Noise ออกไปแล้ว
-        if len(filtered_centers) < 10:
-            st.warning("ระบบสกัดจุดรบกวนแล้วพบตาสับปะรดหลักไม่เพียงพอ กรุณาใช้รูปถ่ายที่ซูมเห็นสับปะรดชัดขึ้นครับ")
-        else:
-            pts = np.array(filtered_centers, dtype=np.float32)
+        # แสดงพิกัดจุดที่กด
+        pts_count = len(st.session_state.clicked_pts)
+        st.write(f"**สถานะการกดจุด:** เลือกแล้ว `{pts_count} / 2` จุด")
 
-            # เรียงจากซ้ายบน -> ขวาล่าง
-            pts = pts[np.argsort(
-                pts[:,0] + pts[:,1]
-            )]
+        if pts_count < 2:
+            st.info("👉 คลิกบนรูปภาพฝั่งซ้ายเพื่อระบุจุดที่ 1 และจุดที่ 2 ตามแนวเกลียว")
 
-            # ใช้ประมาณ 50 จุดแรก
-            pts = pts[:50]
+        # ---------------------------------------------------------------------
+        # คำนวณผลลัพธ์เมื่อกดครบ 2 จุด
+        # ---------------------------------------------------------------------
+        if pts_count == 2:
+            p1, p2 = st.session_state.clicked_pts[0], st.session_state.clicked_pts[1]
+            calculated_theta = calculate_theta_from_2points(p1, p2)
+            brix_val, diff_x, ideal_angle = calc_brix(calculated_theta, model_choice)
 
-            if not FORCE_LEFT_TO_RIGHT:
-                pts[:,0] = -pts[:,0]
+            st.markdown("---")
+            st.subheader("📊 ผลการคำนวณ Brix")
+            
+            m1, m2 = st.columns(2)
+            m1.metric("มุมเกลียวที่วัดได้ (θ)", f"{calculated_theta:.2f}°")
+            m2.metric("🍬 ค่าความหวานประเมิน", f"{brix_val:.2f} °Brix")
 
-            # =========================
-            # DRAW CONNECTIONS 
-            # =========================
-            for i in range(len(pts)-1):
-                p1 = (int(pts[i][0]), int(pts[i][1]))
-                p2 = (int(pts[i+1][0]), int(pts[i+1][1]))
-                cv2.line(rgb, p1, p2, (255,255,0), 2)
+            st.success(f"📍 มุมอุดมคติ: `{ideal_angle:.1f}°` | ค่าความเบี่ยงเบน ($x$): `{diff_x:.2f}°`")
 
-            # =========================
-            # FIT MAIN SPIRAL (🛡️ เกราะชั้นที่ 3: ปรับเป็นแบบคำนวณทนทานต่อ Outliers)
-            # =========================
-            # เปลี่ยนพารามิเตอร์ระยะทางเป็น cv2.DIST_HUBER เพื่อป้องกันไม่ให้เศษกระจายตัวมาดึงทิศทางเส้นหลัก
-            vx, vy, x0, y0 = cv2.fitLine(
-                pts,
-                cv2.DIST_HUBER,
-                0,
-                0.01,
-                0.01
-            )
+    with col1:
+        st.subheader("🎯 คลิกเล็งจุดบนรูปภาพ")
 
-            vx = float(vx.item())
-            vy = float(vy.item())
-            x0 = float(x0.item())
-            y0 = float(y0.item())
+        # วาดภาพที่มีจุดและเส้นกด
+        drawn_pil_img = draw_hud(rotated_cv_img, st.session_state.clicked_pts)
 
-            angle_main = np.degrees(
-                np.arctan2(vy, vx)
-            )
+        # คอมโพเนนต์รับพิกัดการกด (Click coordinates listener)
+        value = streamlit_image_coordinates(drawn_pil_img, key="pil_image")
 
-            if angle_main < 0:
-                angle_main += 180
-
-            L = 3000
-            brix = None
-            angle_used = None
-
-            # =========================
-            # MODEL2 
-            # =========================
-            if model == "model2":
-                cv2.line(
-                    rgb,
-                    (int(x0-vx*L), int(y0-vy*L)),
-                    (int(x0+vx*L), int(y0+vy*L)),
-                    (255,0,0),
-                    6
-                )
-
-                theta = np.radians(75)
-
-                vx_r = (
-                    vx*np.cos(theta)
-                    - vy*np.sin(theta)
-                )
-                vy_r = (
-                    vx*np.sin(theta)
-                    + vy*np.cos(theta)
-                )
-
-                cv2.line(
-                    rgb,
-                    (int(x0-vx_r*L), int(y0-vy_r*L)),
-                    (int(x0+vx_r*L), int(y0+vy_r*L)),
-                    (0,0,255),
-                    5
-                )
-
-                angle_rot = np.degrees(
-                    np.arctan2(vy_r, vx_r)
-                )
-
-                if angle_rot < 0:
-                    angle_rot += 180
-
-                angle_used = angle_rot
-
-                # ===== BRIX MODEL2 =====
-                x_brix = abs(angle_main - 146)
-                brix = (
-                    0.0428*(x_brix**2)
-                    - 0.9296*x_brix
-                    + 16.037
-                )
-
-            # =========================
-            # MODEL3 
-            # =========================
-            elif model == "model3":
-                cv2.line(
-                    rgb,
-                    (int(x0-vx*L), int(y0-vy*L)),
-                    (int(x0+vx*L), int(y0+vy*L)),
-                    (255,0,0),
-                    6
-                )
-
-                theta = np.radians(98)
-
-                vx_r = (
-                    vx*np.cos(theta)
-                    - vy*np.sin(theta)
-                )
-                vy_r = (
-                    vx*np.sin(theta)
-                    + vy*np.cos(theta)
-                )
-
-                cv2.line(
-                    rgb,
-                    (int(x0-vx_r*L), int(y0-vy_r*L)),
-                    (int(x0+vx_r*L), int(y0+vy_r*L)),
-                    (0,0,255),
-                    6
-                )
-
-                angle_98 = np.degrees(
-                    np.arctan2(vy_r, vx_r)
-                )
-
-                if angle_98 < 0:
-                    angle_98 += 180
-
-                angle_used = angle_98
-
-                # เส้นแนวระดับ
-                cv2.line(
-                    rgb,
-                    (int(x0-L), int(y0)),
-                    (int(x0+L), int(y0)),
-                    (0,255,255),
-                    3
-                )
-
-                # ===== BRIX MODEL3 =====
-                x_brix = abs(angle_main - 135)
-                brix = (
-                    0.0366*(x_brix**2)
-                    - 0.8924*x_brix
-                    + 16.696
-                )
-
-            # =========================
-            # DRAW POINTS 
-            # =========================
-            for p in pts:
-                cv2.circle(
-                    rgb,
-                    (int(p[0]), int(p[1])),
-                    5,
-                    (0,255,0),
-                    -1
-                )
-
-            # =========================
-            # SHOW BRIX ON IMAGE & WEB RESULT
-            # =========================
-            if brix is not None:
-                cv2.putText(
-                    rgb,
-                    f"Brix = {brix:.2f}%",
-                    (30, 60),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1.2,
-                    (255,0,255),
-                    3
-                )
-
-            cv2.putText(
-                rgb,
-                f"Main={angle_main:.1f}  Brix={brix:.2f}%",
-                (30, 60),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                1.2,
-                (255, 0, 255),
-                3
-            )
-
-            # แสดงภาพผลลัพธ์ผ่านหน้าเว็บสตรีมลิต
-            st.image(rgb, caption=f"ผลการวิเคราะห์สับปะรดด้วย {model}", use_container_width=True)
-
-            # รายงานสรุปข้อมูลตัวเลขโมเดลคณิตศาสตร์
-            st.markdown("### 📊 ผลสรุปตัวเลขจากการคำนวณ")
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                st.metric("Main Spiral Angle", f"{angle_main:.2f}°")
-            with c2:
-                st.metric("Angle Used", f"{angle_used:.2f}°")
-            with c3:
-                st.metric("Predicted Brix", f"{brix:.2f}%")
+        # รับค่าการคลิกใหม่
+        if value is not None:
+            new_pt = {"x": value["x"], "y": value["y"]}
+            
+            # ป้องกันการบันทึกจุดซ้ำตำแหน่งเดิมขณะ Rerun
+            if len(st.session_state.clicked_pts) == 0 or (st.session_state.clicked_pts[-1] != new_pt):
+                if len(st.session_state.clicked_pts) < 2:
+                    st.session_state.clicked_pts.append(new_pt)
+                    st.rerun()
