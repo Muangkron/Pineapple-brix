@@ -73,11 +73,11 @@ def draw_hud(cv_img, pts):
 
 def calc_brix_val(theta, model_type):
     if "Model 5-8-13" in model_type:
-        ideal = 155.0
+        ideal = 146.0
         diff = abs(theta - ideal)
         brix = (-0.0196 * (diff**2)) + (0.0045 * diff) + 16.757
     else:
-        ideal = 136.0
+        ideal = 135.0
         diff = abs(theta - ideal)
         brix = (0.0082 * (diff**2)) - (0.6667 * diff) + 16.362
     return brix
@@ -89,7 +89,7 @@ with st.sidebar:
     st.header("⚙️ ตัวเลือกโมเดล")
     model_choice = st.radio(
         "เลือกรุ่นโมเดลสับปะรด:",
-        options=["Model 5-8-13 (มุมอุดมคติ 155°)", "Model 8-13-21 (มุมอุดมคติ 136°)"]
+        options=["Model 5-8-13 (มุมอุดมคติ 146°)", "Model 8-13-21 (มุมอุดมคติ 135°)"]
     )
 
 # -----------------------------------------------------------------------------
